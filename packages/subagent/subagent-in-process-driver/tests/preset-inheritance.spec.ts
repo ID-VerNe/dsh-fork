@@ -22,6 +22,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { inheritParentRoute, snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
@@ -139,10 +140,10 @@ describe('a child agent composed in-process', () => {
   })
 
   it('inherits the parent\'s logged request config rather than creation options', async () => {
-    const { ctx, adapter, parent } = await setupPresetHost()
+    const { parent } = await setupPresetHost()
     // Drive one turn so the parent's log has a request/header event with the
     // effective provider/model after any waterfall override.
-    parent.followup({ role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } })
+    parent.followup(createUserMessage({ content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }))
     await parent.whenIdle()
 
     // The parent was created with { provider: 'mock', model: 'mock' } but the
