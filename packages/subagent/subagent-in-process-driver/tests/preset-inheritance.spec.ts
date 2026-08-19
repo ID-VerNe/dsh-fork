@@ -1,10 +1,15 @@
 /**
- * Composition inheritance: a child runs on the preset its parent runs on.
+ * Composition inheritance: a child runs on the preset its parent runs on and
+ * the model_route its parent's log records.
  *
  * With every model-facing row on the agent plane, the tool registry's global
  * layer is empty, so a child that joins no preset reaches the model with no
  * tools at all. These assert the model-visible result — the schemas in the
- * child's own request — rather than the join that produces it.
+ * child's own request — rather than the join that produces it. The route
+ * assertion covers the delegated model: a child inherits the parent's last
+ * logged request config, the durable record of its effective selection after
+ * any `agent/request` waterfall override, rather than the stale creation
+ * options.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -18,7 +23,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
+import { inheritParentRoute, snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { startInProcessRun } from '../src/index.ts'
 
@@ -130,6 +135,73 @@ describe('a child agent composed in-process', () => {
 
     expect(ctx.tools.schemas(run.localAgent).map(schema => schema.name)).toEqual(['reviewing_only'])
     expect(run.localAgent?.session.header.agentPreset).toBe('reviewing')
+    await run.dispose()
+  })
+
+  it('inherits the parent\'s logged request config rather than creation options', async () => {
+    const { ctx, adapter, parent } = await setupPresetHost()
+    // Drive one turn so the parent's log has a request/header event with the
+    // effective provider/model after any waterfall override.
+    parent.followup({ role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } })
+    await parent.whenIdle()
+
+    // The parent was created with { provider: 'mock', model: 'mock' } but the
+    // adapter serves a different resolved route.
+    const logged = parent.session.requestHeader()
+    expect(logged).toBeDefined()
+    expect(logged!.config.provider).toBe('mock')
+    expect(logged!.config.model).toBe('mock')
+
+    // The child inherits from the parent's header, not from parent.options.
+    const inherited = inheritParentRoute(parent)
+    expect(inherited.provider).toBe('mock')
+    expect(inherited.model).toBe('mock')
+
+    const run = await startInProcessRun(spawnRequest(parent), {})
+    await run.result
+
+    // The child's agent options should carry the logged route, not the
+    // creation-time stale value.
+    expect(run.localAgent?.options.provider).toBe('mock')
+    expect(run.localAgent?.options.model).toBe('mock')
+    await run.dispose()
+  })
+
+  it('falls back to agentDefaultModel when the parent has no logged request', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
+    await ctx.plugin(Loader)
+    ctx.loader.builtins.include = Include
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(AgentPresets, { default: 'coding', roots: ROOTS, includeUserRoot: false })
+    const adapter = new MockAdapter([textResponse('parent idle'), textResponse('child done')])
+    ctx.llm.registerAdapter(['mock-origin'], adapter)
+    // Register a separate fallback adapter so the default model route resolves.
+    ctx.llm.registerAdapter(['mock-fallback'], new MockAdapter([textResponse('fallback')]))
+    // Install agentDefaultModel with a different provider/model than the
+    // parent's creation options, so the fallback path is distinguishable.
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('parent-default'),
+      agentOptions: { provider: 'mock-origin', model: 'mock-origin' },
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'coding'),
+    })
+    const parent = handle.agent
+
+    // No request/header exists yet — the parent has never made a request.
+    expect(parent.session.requestHeader()).toBeUndefined()
+
+    // When no agentDefaultModel is installed either, falls back to parent.options.
+    const inherited = inheritParentRoute(parent)
+    expect(inherited.provider).toBe('mock-origin')
+    expect(inherited.model).toBe('mock-origin')
+
+    const run = await startInProcessRun(spawnRequest(parent), {})
+    await run.result
+
+    expect(run.localAgent?.options.provider).toBe('mock-origin')
+    expect(run.localAgent?.options.model).toBe('mock-origin')
     await run.dispose()
   })
 })

@@ -234,6 +234,19 @@ type UnaryTimeoutPolicy = 'default' | 'caller-signal-only'
 const INTERNAL_BASE = 'http://dsh.internal'
 
 /**
+ * UUID v4 string backed by crypto.getRandomValues(), which is available in
+ * insecure contexts (HTTP non-localhost) where crypto.randomUUID() is not.
+ */
+function randomUUIDv4(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
  * Abstract fetch-carrier client. Subclasses supply the transport (doFetch) and may refine the
  * per-message tap (onEnvelope) — platform aspects stay in subclasses, protocol invariants stay
  * here. Envelope observation is a first-class aspect of this data middle layer: the instance
@@ -296,8 +309,9 @@ export abstract class AbstractApiClient implements IApiClient {
   }
 
   protected mintRpcId(): RpcId {
-    // crypto.randomUUID is a Web API (browser + Node ≥19): keeps this base platform-neutral.
-    return RpcId(crypto.randomUUID())
+    // crypto.randomUUID needs a secure context (HTTPS or localhost); the LAN
+    // surface is plain HTTP, so mint from getRandomValues instead.
+    return RpcId(randomUUIDv4())
   }
 
   /**

@@ -62,10 +62,23 @@ export interface IConversation {
 function browserDraftAttachment(file: File): ComposerAttachment {
   return {
     kind: 'image',
-    id: crypto.randomUUID() as DraftAttachmentId,
+    id: randomDraftAttachmentId(),
     previewUrl: URL.createObjectURL(file),
     file,
   }
+}
+
+/**
+ * UUID v4 backed by crypto.getRandomValues(), which works in insecure
+ * contexts (HTTP) where crypto.randomUUID() is not available.
+ */
+function randomDraftAttachmentId(): DraftAttachmentId {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as DraftAttachmentId
 }
 
 interface ImageUrlEntry {

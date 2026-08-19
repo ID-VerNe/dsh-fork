@@ -57,9 +57,58 @@ export function resolveChildDepth(parent: Agent, maxDepth: number | undefined): 
 }
 
 /**
- * Resolve the child's `AgentOptions`: the parent's provider/model/maxTokens
- * route unless the request overrides it, stamped with the child's own
- * delegation depth.
+ * Local structural type for the optional agent-default-model service. The real
+ * service is declared with the same members by the `dsh-agent-default-model`
+ * package, which this package lists as an optional peer; the local interface is
+ * the shape `ctx.get('agentDefaultModel')` is expected to expose and avoids a
+ * cross-package project reference that would violate the package `rootDir`.
+ */
+type AgentDefaultModelService = {
+  currentSelection(): { provider: string; model: string; reasoningEffort?: string }
+}
+
+/** The declaration-merging module that types `ctx.agentDefaultModel` when composed. */
+export interface AgentDefaultModelTyped {}
+
+/**
+ * Resolve the optional agent-default-model service, typed by the composing
+ * module's declaration merge when present.
+ */
+function defaultModelOf(ctx: Context): AgentDefaultModelService | undefined {
+  return ctx.get('agentDefaultModel')
+}
+
+/**
+ * The route a child inherits from its parent: the parent's last logged request
+ * config (the durable record of its effective provider/model after any
+ * `agent/request` waterfall override), falling back to the deployment default
+ * model selection and then the parent's creation-time options.
+ *
+ * The `request/header` config is the single authoritative source because it is
+ * written by `agent-loop`'s {@code buildRequest} after the
+ * `installModelSelection` waterfall fires — every `session.selectModel` change
+ * lands there before the next request. A child created during a parent turn
+ * therefore sees the parent's effective model, not the stale `parent.options`.
+ *
+ * @param parent - the delegating parent agent whose route to inherit.
+ * @returns the inherited provider and model, preferring the logged config,
+ *   then the deployment default, then the parent's creation options.
+ */
+export function inheritParentRoute(parent: Agent): { provider?: string; model?: string } {
+  const logged = parent.session.requestHeader()?.config
+  if (logged !== undefined) return { provider: logged.provider, model: logged.model }
+  const fallback = defaultModelOf(parent.ctx)?.currentSelection()
+  if (fallback !== undefined) return { provider: fallback.provider, model: fallback.model }
+  return {
+    ...parent.options.provider !== undefined ? { provider: parent.options.provider } : {},
+    ...parent.options.model !== undefined ? { model: parent.options.model } : {},
+  }
+}
+
+/**
+ * Resolve the child's `AgentOptions`: the parent's effective provider/model
+ * route (via {@link inheritParentRoute}) unless the request overrides it,
+ * stamped with the child's own delegation depth.
  * @param parent - the delegating parent whose route the child inherits.
  * @param requested - per-child overrides, if any.
  * @param childDepth - the resolved delegation depth to stamp.
@@ -70,12 +119,11 @@ export function resolveChildAgentOptions(
   requested: AgentOptions | undefined,
   childDepth: number,
 ): AgentOptions {
-  const parentProvider = parent.options.provider
-  const parentModel = parent.options.model
+  const inherited = inheritParentRoute(parent)
   const parentMaxTokens = parent.options.maxTokens
   return {
-    ...parentProvider !== undefined ? { provider: parentProvider } : {},
-    ...parentModel !== undefined ? { model: parentModel } : {},
+    ...inherited.provider !== undefined ? { provider: inherited.provider } : {},
+    ...inherited.model !== undefined ? { model: inherited.model } : {},
     ...parentMaxTokens !== undefined ? { maxTokens: parentMaxTokens } : {},
     ...requested,
     subagentDepth: childDepth,

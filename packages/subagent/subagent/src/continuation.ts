@@ -43,6 +43,7 @@ import {
   applyChildComposition,
   captureDelegatedPolicyOverrides,
   childSessionMeta,
+  inheritParentRoute,
   resolveChildAgentOptions,
   resolveChildDepth,
 } from './child-agent.ts'
@@ -410,8 +411,13 @@ export class SubagentContinuationManager {
     const childDepth = resolveChildDepth(parent, request.maxDepth)
     // Snapshot before any await: invalid descriptor JSON rejects the call
     // before a child exists, and the detached value is what reaches the log.
-    const agentProvider = request.agentOptions?.provider ?? parent.options.provider
-    const agentModel = request.agentOptions?.model ?? parent.options.model
+    // The inherited route is read ONCE here and reused by
+    // `resolveChildAgentOptions` below, so the descriptor and the runtime child
+    // agree — cold resume rebuilds the child under exactly the model its log
+    // declares.
+    const inherited = inheritParentRoute(parent)
+    const agentProvider = request.agentOptions?.provider ?? inherited.provider
+    const agentModel = request.agentOptions?.model ?? inherited.model
     const descriptor = snapshotSubagentDescriptor({
       mode: 'continuable',
       provider: spec.provider,
