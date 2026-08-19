@@ -37,14 +37,14 @@ function appendRetryTurn(session: Session, turn: number) {
   session.append('llm/retry', { turn, step: 1, ...normal })
 }
 
-const failure = { message: 'provider busy', code: 'RATE_LIMIT', status: 429 }
+const failure = { message: 'provider busy', code: 'QUOTA', status: 429 }
 const normal = {
   retryId: RetryId('normal-retry-chain'),
   provider: 'mock',
   mode: 'normal' as const,
   policyKey: 'normal-policy',
   retry: 1,
-  maxRetries: 2,
+  maxRetries: 10,
   delayMs: 1,
   failure,
 }
@@ -138,7 +138,7 @@ describe('llm-retry invariants', () => {
     ['retry-fraction', { ...normal, retry: 1.5 }, /positive safe integer/],
     ['max-zero', { ...normal, maxRetries: 0 }, /positive safe maxRetries/],
     ['max-fraction', { ...normal, maxRetries: 1.5 }, /positive safe maxRetries/],
-    ['over-budget', { ...normal, retry: 3 }, /must not exceed/],
+    ['over-budget', { ...normal, retry: 11 }, /must not exceed/],
     ['always-maximum', { ...always, maxRetries: 2 }, /always mode must omit maxRetries/],
     ['unknown-mode', { ...always, mode: 'sometimes' }, /mode must be normal or always/],
     ['empty-provider', { ...always, provider: '' }, /provider must be a non-empty string/],

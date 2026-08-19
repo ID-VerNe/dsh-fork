@@ -24,7 +24,7 @@ The package root exposes the Cordis plugin contract and `DeepSeekAdapter`; wire 
       mode: always           # normal | always
       backoff:
         initialDelayMs: 500
-        maxDelayMs: 10000
+        maxDelayMs: 60000
         jitterRatio: 0.1
     defaultContextWindow: 1000000 # optional positive-integer fallback; this is the default
     models:                  # optional; defaults to V4 Flash and V4 Pro

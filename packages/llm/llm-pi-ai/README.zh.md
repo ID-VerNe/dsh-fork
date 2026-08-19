@@ -25,7 +25,7 @@
           maxRetries: 3
           backoff:
             initialDelayMs: 500
-            maxDelayMs: 10000
+            maxDelayMs: 60000
             jitterRatio: 0.1
       # Catalog route with its catalog narrowed to one model and that model's
       # capacity corrected; every unset field still comes from the catalog.

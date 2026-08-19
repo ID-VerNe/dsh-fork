@@ -389,10 +389,12 @@ describe('DeepSeekAdapter against a mock server', () => {
     expect(httpErrorCode(413, { code: 'context_length_exceeded' })).toBe('HTTP_413')
   })
 
-  it('distinguishes terminal quota exhaustion from transient HTTP 429 throttling', () => {
+  it('classifies quota exhaustion wording as retryable rate limiting (429 takes precedence)', () => {
     expect(httpErrorCode(429, { code: 'insufficient_quota', message: 'account credits exhausted' }))
-      .toBe(QUOTA_EXCEEDED_CODE)
+      .toBe('RATE_LIMIT')
     expect(httpErrorCode(429, { message: 'request rate limit exceeded' })).toBe('RATE_LIMIT')
+    // Non-429 status with quota wording still lands on QUOTA (terminal for bare HAR code).
+    expect(httpErrorCode(402, { code: 'insufficient_quota' })).toBe(QUOTA_EXCEEDED_CODE)
   })
 
   it('keeps the status-line message for JSON error bodies without a message', async () => {

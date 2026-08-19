@@ -9,15 +9,16 @@
 
 import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { EMPTY_RESPONSE_CODE } from './error.ts'
+import { EMPTY_RESPONSE_CODE, QUOTA_EXCEEDED_CODE } from './error.ts'
 
-const DEFAULT_MAX_RETRIES = 2
+const DEFAULT_MAX_RETRIES = 10
 const DEFAULT_INITIAL_DELAY_MS = 500
-const DEFAULT_MAX_DELAY_MS = 10_000
+const DEFAULT_MAX_DELAY_MS = 60_000
 const DEFAULT_JITTER_RATIO = 0.1
 const DEFAULT_RETRYABLE_CODES = Object.freeze([
   EMPTY_RESPONSE_CODE,
   'RATE_LIMIT',
+  QUOTA_EXCEEDED_CODE,
   'SERVER',
   'TIMEOUT',
   'TRANSPORT',
@@ -27,7 +28,7 @@ const DEFAULT_RETRYABLE_CODES = Object.freeze([
 export interface BackoffConfig {
   /** Initial local exponential-backoff delay in milliseconds (default 500). */
   initialDelayMs?: number
-  /** Maximum locally scheduled or accepted provider delay in milliseconds (default 10000). */
+  /** Maximum locally scheduled or accepted provider delay in milliseconds (default 60000). */
   maxDelayMs?: number
   /** Symmetric random multiplier range around one (default 0.1). */
   jitterRatio?: number
@@ -37,7 +38,7 @@ export interface BackoffConfig {
 export interface NormalRetryPolicyConfig {
   /** Retry only configured transient failure codes. */
   mode: 'normal'
-  /** Maximum eligible retries after the first request (default 2). */
+  /** Maximum eligible retries after the first request (default 10). */
   maxRetries?: number
   /** Stable failure codes eligible for this policy. */
   retryableCodes?: string[]
