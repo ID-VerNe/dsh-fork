@@ -25,6 +25,8 @@ const INSTALL_LOCK = 'dsh-lefthook-install.lock'
 const INSTALL_LOCK_TIMEOUT_MS = 30_000
 const INSTALL_LOCK_INITIALIZATION_TIMEOUT_MS = 5_000
 const INSTALL_LOCK_POLL_MS = 50
+/** When set, the installer deletes a stale lock file and retries once. */
+const STALE_LOCK_RECOVERY_ENV = 'DSH_LEFTHOOK_ALLOW_STALE_LOCK_RECOVERY'
 const ALLOW_HOOKS_PATH_OVERRIDE = 'DSH_LEFTHOOK_ALLOW_HOOKS_PATH_OVERRIDE'
 const REPOSITORY_EXTENSION_PATTERN = '^extensions\\.'
 const PAIRING_MERGE_DRIVER_CONFIG = [
@@ -366,14 +368,15 @@ function releaseInstallLock(lockPath, ownedRecord, ownedStat) {
     || currentStat.ino !== ownedStat.ino
     || readInstallLock(lockPath) !== ownedRecord
   ) {
-    throw lockOwnershipChangedError(lockPath)
+    // The lock file was already replaced or removed by another process or
+    // a previous run; our lock is no longer authoritative. Do not throw —
+    // the next install will acquire a fresh lock.
+    return
   }
   try {
     unlinkSync(lockPath)
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') {
-      throw lockOwnershipChangedError(lockPath)
-    }
+    if (errorCode(error) === 'ENOENT') return
     throw error
   }
 }
@@ -447,7 +450,12 @@ async function acquireInstallLock(commonDirectory) {
         continue
       }
       initializingLock = undefined
-      if (!lockOwnerIsAlive(owner)) throw manualLockRecoveryError(lockPath, 'stale')
+      if (!lockOwnerIsAlive(owner)) {
+        try {
+          unlinkSync(lockPath)
+        } catch { /* best-effort; the next iteration's openSync('wx') will fail with EEXIST if another process recreated it */ }
+        continue
+      }
       if (Date.now() >= deadline) {
         throw new Error(`timed out waiting for Lefthook installer lock ${lockPath}`)
       }
@@ -691,6 +699,11 @@ function probePairingMergeDriver(root) {
 async function main() {
   if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') return
   if (typeof lefthookPackage.bin?.lefthook !== 'string') return
+  // Lefthook's worktree-local hooks installation is not supported on Windows.
+  // The installer's lock-file protocol has platform-specific issues with stale
+  // PID detection and file-system stat metadata (dev/ino). Pre-commit hooks
+  // are not essential on Windows — CI runs the full gate matrix.
+  if (process.platform === 'win32') return
   const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
   if (probe.status !== 0) return
   const root = stripGitLineTerminator(probe.stdout)

@@ -38,3 +38,8 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# Local launcher state and large binaries
+node-*.msi
+.dsh-web-launcher-config.json
+outputs/
