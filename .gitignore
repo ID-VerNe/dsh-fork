@@ -43,3 +43,4 @@ worktrees/
 node-*.msi
 .dsh-web-launcher-config.json
 outputs/
+**/.plan/

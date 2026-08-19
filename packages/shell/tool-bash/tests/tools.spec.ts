@@ -495,6 +495,21 @@ describe('background execution through the job runtime', () => {
     expect(text(result)).toContain('background jobs unavailable: load @deepseek-ai/dsh-jobs and @deepseek-ai/dsh-tool-jobs')
   })
 
+  it('a background job is killed by its timeout when the model passes timeoutMs', async () => {
+    const ctx = await setupWithTasks()
+    await call(ctx, 'bash', { command: 'sleep 60', description: 'test command', run_in_background: true, timeoutMs: 200 })
+    const final = await callUntilText(ctx, 'job_output', { job_id: 'bash-1', wait: true }, '[status: killed, signal: SIGTERM]')
+    expect(text(final)).toContain('[status: killed, signal: SIGTERM]')
+  })
+
+  it('a background job that finishes before its timeout is reported as completed, not killed', async () => {
+    const ctx = await setupWithTasks()
+    await call(ctx, 'bash', { command: 'echo bg-fast', description: 'test command', run_in_background: true, timeoutMs: 60_000 })
+    const final = await callUntilText(ctx, 'job_output', { job_id: 'bash-1', wait: true }, '[status: completed, exit code: 0]')
+    expect(text(final)).toContain('bg-fast')
+    expect(text(final)).not.toContain('killed')
+  })
+
   it('a pre-aborted call is skipped before the process starts', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)

@@ -187,6 +187,16 @@ const BACKGROUND_OUTPUT_PROPERTIES = {
   jobId: { type: 'string', required: true },
 } as const
 
+/**
+ * Default lifetime for a background bash job when the model does not pass
+ * `timeoutMs`. The executor cap (maxTimeoutMs) matches this ceiling, so a
+ * foreground and a background call bound to the same wall-clock budget.
+ */
+const DEFAULT_BG_TIMEOUT_MS = 600_000
+
+/** Hard ceiling for a background job lifetime, mirroring the executor cap. */
+const MAX_BG_TIMEOUT_MS = 600_000
+
 export function apply(ctx: Context, config: Config = {}): void {
   const backgroundEnabled = config.enableRunInBackground ?? true
   const defaultMode = ctx.shell.sandboxMode
@@ -254,7 +264,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       timeoutMs: { type: 'number', description: 'Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry.' },
       workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
       ...backgroundEnabled ? {
-        run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
+        run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). The command is killed after 10 minutes by default; override with timeoutMs (capped at 10 minutes).' },
       } : {},
       ...escalationModes.length > 0 ? {
         sandbox_permissions: {
@@ -367,10 +377,24 @@ export function apply(ctx: Context, config: Config = {}): void {
           label: args.command,
           ...exec.agent ? { owner: exec.agent } : {},
           run: () => {
-            const proc = ctx.shell.start(ctx.shell.resolve(request))
+            // Background runs ignore timeoutMs in the spec; a background timeout is
+            // enforced with an abort signal, killing the process when it fires.
+            const bgTimeout = Math.min(args.timeoutMs ?? DEFAULT_BG_TIMEOUT_MS, MAX_BG_TIMEOUT_MS)
+            const bgAbort = new AbortController()
+            const bgTimer = setTimeout(() => { bgAbort.abort() }, bgTimeout)
+            const proc = ctx.shell.start(ctx.shell.resolve({
+              ...request,
+              signal: bgAbort.signal,
+            }))
             return {
-              cancel: () => void proc.kill(),
-              done: proc.done.then(() => processOutcome(proc)),
+              cancel: () => {
+                clearTimeout(bgTimer)
+                void proc.kill()
+              },
+              done: proc.done.then(() => {
+                clearTimeout(bgTimer)
+                return processOutcome(proc)
+              }),
               readOutput: () => renderProcessRead(proc.readOutput(), proc.sandbox, escalationModes),
             }
           },

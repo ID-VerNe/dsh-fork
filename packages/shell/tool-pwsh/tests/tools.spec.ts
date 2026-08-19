@@ -747,6 +747,94 @@ describe('background execution through the job runtime', () => {
     expect(text(result)).toContain('background jobs unavailable: load @deepseek-ai/dsh-jobs and @deepseek-ai/dsh-tool-jobs')
   })
 
+  it('a background job is killed by its timeout when the model passes timeoutMs', async () => {
+    const { ctx, bash } = await setupWithTasks()
+    // A background handler whose done promise settles when the spec signal fires.
+    bash.backgroundHandler = (spec) => {
+      const state = { status: 'running' as 'running' | 'killed', signal: null as NodeJS.Signals | null }
+      return {
+        get status() { return state.status },
+        get exitCode() { return null },
+        get signal() { return state.signal },
+        done: spec.signal !== undefined
+          ? new Promise<void>((resolve) => {
+            if (spec.signal!.aborted) {
+              state.status = 'killed'
+              state.signal = 'SIGTERM'
+              resolve()
+            } else {
+              spec.signal!.addEventListener('abort', () => {
+                state.status = 'killed'
+                state.signal = 'SIGTERM'
+                resolve()
+              }, { once: true })
+            }
+          })
+          : Promise.resolve(),
+        readOutput: () => ({ delta: '', lossy: false }),
+        kill: () => false,
+      }
+    }
+    await call(ctx, 'pwsh', { command: 'Start-Sleep -Seconds 60', description: 'test command', run_in_background: true, timeoutMs: 200 })
+    const final = await callUntilText(ctx, 'job_output', { job_id: 'pwsh-1', wait: true }, '[status: killed, signal: SIGTERM]')
+    expect(text(final)).toContain('[status: killed, signal: SIGTERM]')
+  })
+
+  it('a background job that finishes before its timeout is reported as completed, not killed', async () => {
+    const { ctx } = await setupWithTasks()
+    // The default fake process settles immediately; the 60s timer never fires.
+    await call(ctx, 'pwsh', { command: 'Write-Output bg-ok', description: 'test command', run_in_background: true, timeoutMs: 60_000 })
+    const final = await callUntilText(ctx, 'job_output', { job_id: 'pwsh-1', wait: true }, '[status: completed, exit code: 0]')
+    expect(text(final)).toContain('[status: completed, exit code: 0]')
+    expect(text(final)).not.toContain('killed')
+  })
+
+  it('wires a background timeout signal even when the model omits timeoutMs', async () => {
+    const { ctx, bash } = await setupWithTasks()
+    await call(ctx, 'pwsh', { command: 'Write-Output hi', description: 'test command', run_in_background: true })
+    // The default 10-minute budget must still reach the executor as a signal.
+    expect(bash.specs[0]?.signal).toBeInstanceOf(AbortSignal)
+    expect(bash.specs[0]?.signal?.aborted).toBe(false)
+  })
+
+  it('cancelled (job_kill) while the timeout timer is pending settles as killed', async () => {
+    const { ctx, bash } = await setupWithTasks()
+    bash.backgroundHandler = () => killableProcess()
+    await call(ctx, 'pwsh', { command: 'Start-Sleep -Seconds 60', description: 'test command', run_in_background: true, timeoutMs: 60_000 })
+
+    // job_kill before the 60s timer fires must stop the job via cancel(), not
+    // wait for the timeout.
+    const killed = await call(ctx, 'job_kill', { job_id: 'pwsh-1' })
+    expect(text(killed)).toBe('requested cancellation of job pwsh-1')
+    const final = await call(ctx, 'job_output', { job_id: 'pwsh-1', wait: true })
+    expect(text(final)).toContain('[status: killed, signal: SIGTERM]')
+  })
+
+  it('an oversized timeoutMs is capped and never rejects or fires early', async () => {
+    const { ctx, bash } = await setupWithTasks()
+    // 10^12 ms > the 600s cap; the job must still start and stay alive past the
+    // point a raw (uncapped) small timer would have fired.
+    const started = await call(ctx, 'pwsh', { command: 'Write-Output hi', description: 'test command', run_in_background: true, timeoutMs: 1_000_000_000_000 })
+    expect(started.isError).toBe(false)
+    expect(bash.specs[0]?.signal).toBeInstanceOf(AbortSignal)
+    // Not aborted within the first 50ms — proves the cap prevented a tiny timer.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(bash.specs[0]?.signal?.aborted).toBe(false)
+    await call(ctx, 'job_output', { job_id: 'pwsh-1', wait: true })
+  })
+
+  it('two background jobs each get their own independent timeout signal', async () => {
+    const { ctx, bash } = await setupWithTasks()
+    await call(ctx, 'pwsh', { command: 'Write-Output a', description: 'test command', run_in_background: true, timeoutMs: 10_000 })
+    await call(ctx, 'pwsh', { command: 'Write-Output b', description: 'test command', run_in_background: true, timeoutMs: 20_000 })
+    expect(bash.specs[0]?.signal).toBeInstanceOf(AbortSignal)
+    expect(bash.specs[1]?.signal).toBeInstanceOf(AbortSignal)
+    // Distinct controllers: firing one job's timeout must not abort the other.
+    expect(bash.specs[0]?.signal).not.toBe(bash.specs[1]?.signal)
+    await call(ctx, 'job_output', { job_id: 'pwsh-1', wait: true })
+    await call(ctx, 'job_output', { job_id: 'pwsh-2', wait: true })
+  })
+
   it('a pre-aborted call is skipped before the process starts', async () => {
     const { ctx, bash } = await setupWithTasks()
     const controller = new AbortController()

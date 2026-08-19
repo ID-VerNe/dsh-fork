@@ -114,6 +114,56 @@ describe.skipIf(!hasPwsh)('pwsh tool over the real pwsh executor', () => {
     expect(lf(text(result))).toContain('[timed out after 100ms]')
   })
 
+  it('a background timeout kills the run and job_output reports it as killed', async () => {
+    const started = await call('pwsh', {
+      command: 'Start-Sleep -Seconds 60',
+      description: 'sleep forever in background',
+      run_in_background: true,
+      timeoutMs: 200,
+    })
+    expect(started.isError).toBe(false)
+    if (started.isError) throw new Error('expected background pwsh success')
+    const jobId = (started.value as { jobId: string }).jobId
+
+    // The timeout fires after 200ms; the process must settle as killed. Windows
+    // can report the forced termination as exit 1 without a SIGTERM marker, so
+    // the stable fact is the killed status, not the specific signal detail.
+    const deadline = Date.now() + 10_000
+    let output = ''
+    while (Date.now() < deadline) {
+      const read = await call('job_output', { job_id: jobId, wait: true })
+      output += text(read)
+      if (output.includes('[status: killed')) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    expect(output).toContain('[status: killed')
+  })
+
+  it('a background job without timeoutMs is NOT killed early (default budget intact)', async () => {
+    const started = await call('pwsh', {
+      command: 'Start-Sleep -Milliseconds 500; Write-Output bg-survives',
+      description: 'background no-timeout',
+      run_in_background: true,
+    })
+    expect(started.isError).toBe(false)
+    if (started.isError) throw new Error('expected background pwsh success')
+    const jobId = (started.value as { jobId: string }).jobId
+
+    // Run for 400ms — comfortably longer than the 200ms used in the timeout
+    // test above — and confirm the job is still alive and completes normally.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    const deadline = Date.now() + 10_000
+    let output = ''
+    while (Date.now() < deadline) {
+      const read = await call('job_output', { job_id: jobId })
+      output += text(read)
+      if (output.includes('bg-survives') && output.includes('[status: completed, exit code: 0]')) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    expect(output).toContain('bg-survives')
+    expect(output).toContain('[status: completed, exit code: 0]')
+  })
+
   it('an upstream cancellation aborts the run', async () => {
     const controller = new AbortController()
     const pending = call('pwsh', {
